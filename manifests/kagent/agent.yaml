@@ -1,0 +1,61 @@
+# A kagent Agent that reaches its LLM only through llm-gateway, authenticating with a
+# short-lived projected ServiceAccount token. The token volume is mounted ONLY into the
+# llm-token-proxy sidecar, so the agent container never sees it.
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: gw-test-agent
+  namespace: kagent
+spec:
+  type: Declarative
+  description: "Reaches its LLM only via llm-gateway using a short-lived ServiceAccount token"
+  declarative:
+    runtime: go
+    modelConfig: gw-space-bunny-alpha
+    systemMessage: |
+      You are a minimal test agent. Answer briefly. You have no tools.
+    deployment:
+      env:
+        # The runtime's OpenAI client won't start without a key.
+        # Not a secret: the sidecar replaces the Authorization header on every request.
+        - name: OPENAI_API_KEY
+          value: unused-sidecar-injects-sa-token
+      volumes:
+        - name: llm-gateway-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: llm-gateway
+                  expirationSeconds: 3600
+                  path: token
+      # If your sidecar image is in a private registry, add an imagePullSecret here.
+      # imagePullSecrets:
+      #   - name: my-registry-pull-secret
+      extraContainers:
+        - name: llm-token-proxy
+          # Build from ./sidecar and push to your own registry; pin by digest in production.
+          image: REPLACE_WITH_YOUR_REGISTRY/llm-token-proxy:latest
+          env:
+            - name: LISTEN_ADDR
+              value: 127.0.0.1:8081   # loopback only; 8080 is the agent's own port
+            - name: UPSTREAM_URL
+              value: http://llm-gateway.llm-gateway.svc.cluster.local:80
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              memory: 32Mi
+          volumeMounts:
+            - name: llm-gateway-token
+              mountPath: /var/run/secrets/llm-gateway
+              readOnly: true

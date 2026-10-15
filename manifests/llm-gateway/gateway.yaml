@@ -1,0 +1,37 @@
+# Dedicated LLM gateway: all kagent model traffic to OpenRouter goes through here.
+# Separate from agentgateway-proxy (MCP/A2A) so traffic, logs and metrics are easy to tell apart.
+# Service name == Gateway name: llm-gateway.llm-gateway.svc.cluster.local:80
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+metadata:
+  name: llm-gateway-config
+  namespace: llm-gateway
+spec:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: llm-gateway
+  namespace: llm-gateway
+spec:
+  gatewayClassName: agentgateway
+  infrastructure:
+    # ClusterIP only: agents reach it in-cluster, nothing is exposed on the LAN
+    parametersRef:
+      name: llm-gateway-config
+      group: agentgateway.dev
+      kind: AgentgatewayParameters
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same

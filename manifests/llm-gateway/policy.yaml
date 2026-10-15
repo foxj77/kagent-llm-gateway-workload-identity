@@ -1,0 +1,39 @@
+# Short-lived identity: agents present a projected ServiceAccount token (aud=llm-gateway,
+# 1h TTL, rotated by the kubelet). The gateway validates it against the cluster's
+# ServiceAccount signing key, then checks the subject against an allow list.
+#
+# JWKS: this is your cluster's PUBLIC signing key (not a secret). It is inlined because
+# the API server's JWKS endpoint requires authentication. Fetch it with:
+#   kubectl get --raw /openid/v1/jwks
+# and paste the whole JSON document below. A cluster rebuild or signing-key rotation
+# changes it: every call then fails closed with 401 until you refresh it.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: llm-gateway-jwt
+  namespace: llm-gateway
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: llm-gateway
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+        # The issuer must match your cluster's ServiceAccount issuer:
+        #   kubectl get --raw /.well-known/openid-configuration
+        - issuer: https://kubernetes.default.svc.cluster.local
+          audiences:
+            - llm-gateway
+          validation:
+            requiredClaims: [exp, aud, sub]
+          jwks:
+            inline: 'REPLACE_WITH_OUTPUT_OF_kubectl_get_--raw_/openid/v1/jwks'
+    authorization:
+      action: Allow
+      policy:
+        matchExpressions:
+          # Per-agent allow list: the ServiceAccount identity is the agent identity.
+          # kagent names each agent's ServiceAccount after the agent.
+          - 'jwt.sub in ["system:serviceaccount:kagent:gw-test-agent"]'

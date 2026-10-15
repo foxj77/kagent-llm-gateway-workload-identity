@@ -1,0 +1,37 @@
+# The only place the OpenRouter API key is used. Agents never see it.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: openrouter
+  namespace: llm-gateway
+spec:
+  ai:
+    provider:
+      openai: {}
+      host: openrouter.ai
+      port: 443
+      path: /api/v1/chat/completions
+  policies:
+    auth:
+      secretRef:
+        name: openrouter-credentials
+    tls:
+      sni: openrouter.ai
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: openrouter-chat
+  namespace: llm-gateway
+spec:
+  parentRefs:
+    - name: llm-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1/chat/completions
+      backendRefs:
+        - group: agentgateway.dev
+          kind: AgentgatewayBackend
+          name: openrouter
