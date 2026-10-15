@@ -80,7 +80,7 @@ images/                                # diagrams
 
 ```bash
 kubectl port-forward -n llm-gateway svc/llm-gateway 18080:80 &
-B='{"model":"stealth/space-bunny-alpha","messages":[{"role":"user","content":"hi"}]}'
+B='{"model":"nvidia/nemotron-3.5-lightning:free","messages":[{"role":"user","content":"hi"}]}'
 
 # No token -> 401
 curl -s -o /dev/null -w "%{http_code}\n" localhost:18080/v1/chat/completions \

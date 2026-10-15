@@ -11,7 +11,7 @@ spec:
   description: "Reaches its LLM only via llm-gateway using a short-lived ServiceAccount token"
   declarative:
     runtime: go
-    modelConfig: gw-space-bunny-alpha
+    modelConfig: gw-nemotron-3-5-lightning-free
     systemMessage: |
       You are a minimal test agent. Answer briefly. You have no tools.
     deployment:

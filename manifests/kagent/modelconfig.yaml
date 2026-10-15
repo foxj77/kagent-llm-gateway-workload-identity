@@ -3,10 +3,10 @@
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
-  name: gw-space-bunny-alpha
+  name: gw-nemotron-3-5-lightning-free
   namespace: kagent
 spec:
-  model: stealth/space-bunny-alpha   # any OpenRouter model id
+  model: nvidia/nemotron-3.5-lightning:free   # any OpenRouter model id
   provider: OpenAI                   # OpenAI-compatible wire format
   openAI:
     baseUrl: "http://127.0.0.1:8081/v1"   # the sidecar, not the internet
