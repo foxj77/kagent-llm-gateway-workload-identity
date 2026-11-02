@@ -1,0 +1,45 @@
+# Part 2: read the post before it goes out. Prompts sent to OpenRouter are rejected (403) if they
+# contain something that looks like a credential, and the same patterns are masked in (non-streamed) responses.
+#
+# Honest limits: regex is a seat belt, not a guarantee (encoded, split or novel secrets pass), and agentgateway
+# does not apply response masking to streamed responses. Patterns use Rust regex syntax (no look-arounds).
+# From agentgateway 1.7 the guard also inspects tool outputs by default (scope: SystemPrompt, Messages, ToolOutput).
+# Set scope: [SystemPrompt, Messages] on the guard to restore the 1.6 behaviour.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: llm-gateway-prompt-guard
+  namespace: llm-gateway
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: openrouter
+  backend:
+    ai:
+      promptGuard:
+        request:
+          - regex:
+              action: Reject
+              matches:
+                - 'gh[pousr]_[A-Za-z0-9]{36,}'                  # GitHub tokens (classic / OAuth / app)
+                - 'github_pat_[A-Za-z0-9_]{22,}'                # GitHub fine-grained PAT
+                - 'sk-or-v1-[A-Za-z0-9]{32,}'                   # OpenRouter key
+                - 'AGE-SECRET-KEY-1[0-9A-Z]{50,}'               # age private key (SOPS)
+                - '-----BEGIN [A-Z ]*PRIVATE KEY-----'          # PEM private keys
+                - 'AKIA[0-9A-Z]{16}'                            # AWS access key id
+                - 'discord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+'  # Discord webhook URL
+            response:
+              statusCode: 403
+              message: "Request blocked by llm-gateway prompt guard: it appears to contain a credential."
+        response:
+          - regex:
+              action: Mask
+              matches:
+                - 'gh[pousr]_[A-Za-z0-9]{36,}'
+                - 'github_pat_[A-Za-z0-9_]{22,}'
+                - 'sk-or-v1-[A-Za-z0-9]{32,}'
+                - 'AGE-SECRET-KEY-1[0-9A-Z]{50,}'
+                - '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+                - 'AKIA[0-9A-Z]{16}'
+                - 'discord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+'

@@ -1,0 +1,18 @@
+# The Kubernetes API server, as a backend used only to fetch the ServiceAccount JWKS (policy.yaml jwks.remote).
+# Not routed: no HTTPRoute points here.
+#
+# TLS: the API server's certificate is signed by the cluster CA, which Kubernetes publishes in every namespace as the
+# kube-root-ca.crt ConfigMap (key ca.crt), so a rebuilt cluster's new CA is picked up with no change in Git.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: kube-apiserver
+  namespace: llm-gateway
+spec:
+  static:
+    host: kubernetes.default.svc.cluster.local
+    port: 443
+  policies:
+    tls:
+      caCertificateRefs:
+        - name: kube-root-ca.crt

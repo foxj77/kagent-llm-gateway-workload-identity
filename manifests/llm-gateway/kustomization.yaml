@@ -5,4 +5,10 @@ resources:
   - gateway.yaml
   - backend.yaml
   - policy.yaml
+  # part 2
+  - model-header-policy.yaml
+  - prompt-guard-policy.yaml
+  - kube-apiserver-backend.yaml
+  - jwks-discovery-rbac.yaml
+  - networkpolicy.yaml
   # Create the openrouter-credentials Secret separately (see openrouter-credentials.example.yaml).

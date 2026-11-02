@@ -2,3 +2,8 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: llm-gateway
+  labels:
+    # Part 2: the gateway pod meets Pod Security "restricted" (see the seccomp setting in gateway.yaml).
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

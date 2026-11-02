@@ -1,0 +1,21 @@
+# Lets agentgateway fetch the cluster's ServiceAccount signing keys (JWKS) itself.
+#
+# The API server serves /openid/v1/jwks and /.well-known/openid-configuration only to callers bound to the built-in
+# ClusterRole system:service-account-issuer-discovery, granted by default to system:serviceaccounts. agentgateway's
+# remote JWKS fetch cannot present a token, so this also grants the role to unauthenticated callers, the approach the
+# Kubernetes documentation describes for OIDC discovery ("Service account issuer discovery").
+#
+# What it exposes: the public signing keys and the issuer URL, nothing else (the role covers only those two
+# non-resource URLs). Check who can reach your API server anonymously before applying this.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: service-account-issuer-discovery-unauthenticated
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:unauthenticated

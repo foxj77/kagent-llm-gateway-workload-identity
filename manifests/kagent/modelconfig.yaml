@@ -1,5 +1,5 @@
-# The agent side of the change: no apiKeySecret, and the base URL is the sidecar on
-# loopback. The gateway passes the model name through to OpenRouter.
+# The agent side of the change: no apiKeySecret, and the base URL is the sidecar on loopback. The gateway passes the
+# model name through to OpenRouter, and only allows each agent its own model (manifests/llm-gateway/policy.yaml).
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
@@ -10,3 +10,6 @@ spec:
   provider: OpenAI                   # OpenAI-compatible wire format
   openAI:
     baseUrl: "http://127.0.0.1:8081/v1"   # the sidecar, not the internet
+    # Part 2: without maxTokens every request asks for the model's full output window (131072 here), and OpenRouter
+    # reserves that much credit up front: on a low balance every call gets 402 before it runs.
+    maxTokens: 8192

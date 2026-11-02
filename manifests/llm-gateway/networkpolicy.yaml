@@ -1,0 +1,67 @@
+# Only labelled agent pods may reach the llm-gateway, and the gateway may reach only DNS, its control plane and the
+# internet on 443. OpenRouter sits behind Cloudflare, so an IP allow list for it is not realistic; private ranges are
+# excluded so the gateway cannot be used to reach in-cluster services.
+#
+# Check that your CNI enforces NetworkPolicy, then prove it with scripts/test-network-policies.sh (from a running pod,
+# on every node): a policy object existing proves nothing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm-gateway
+  namespace: llm-gateway
+spec:
+  podSelector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: llm-gateway
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Agent pods, labelled by manifests/kagent/llm-gateway-sidecar-patch.yaml (and the test pods)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kagent
+          podSelector:
+            matchLabels:
+              llm-gateway.example.com/client: "true"
+      ports:
+        - port: 80
+          protocol: TCP
+    # Readiness/startup probes (kubelet), health endpoint only
+    - ports:
+        - port: 15021
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # xDS config from the agentgateway controller (which also delivers the JWKS it fetches)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentgateway-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: agentgateway
+      ports:
+        - port: 9978
+          protocol: TCP
+    # OpenRouter (public internet, HTTPS only)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
