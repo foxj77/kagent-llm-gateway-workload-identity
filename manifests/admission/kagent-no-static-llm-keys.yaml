@@ -1,0 +1,146 @@
+# Part 2, "keep it locked": in the kagent namespace, refuse anything that would bring back a static LLM API key or
+# bypass the llm-gateway. ValidatingAdmissionPolicy is built into the API server (Kubernetes 1.30+): no extra pods and
+# no webhook in the request path. All bindings: validationActions [Deny], scoped to namespace kagent.
+# Test: scripts/test-admission-policies.sh (server-side dry-run; admission policies run on dry-run).
+#
+# kagent-openrouter is the name of the shared key Secret the agents used before the gateway. Replace it with yours.
+#
+# 1. Workloads: no reference to the old kagent-openrouter Secret anywhere; agent workloads (managed-by=kagent) may
+#    not take OPENAI_API_KEY from any Secret.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kagent-no-static-llm-keys-workloads
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  variables:
+    - name: podSpec
+      expression: "object.kind == 'Pod' ? object.spec : object.spec.template.spec"
+    - name: containers
+      expression: >-
+        variables.podSpec.containers
+        + (has(variables.podSpec.initContainers) ? variables.podSpec.initContainers : [])
+    # Agent workloads (created by the kagent controller from Agent CRs) carry app.kubernetes.io/managed-by=kagent.
+    # Chart components (e.g. kagent-tools, which reads OPENAI_API_KEY from its own chart Secret) are not agents.
+    - name: podLabels
+      expression: >-
+        object.kind == 'Pod'
+        ? (has(object.metadata.labels) ? object.metadata.labels : {})
+        : (has(object.spec.template.metadata.labels) ? object.spec.template.metadata.labels : {})
+    - name: isAgent
+      expression: "'app.kubernetes.io/managed-by' in variables.podLabels && variables.podLabels['app.kubernetes.io/managed-by'] == 'kagent'"
+  validations:
+    - expression: >-
+        !variables.containers.exists(c, has(c.env) && c.env.exists(e,
+          has(e.valueFrom) && has(e.valueFrom.secretKeyRef)
+          && (e.valueFrom.secretKeyRef.name == 'kagent-openrouter' || (variables.isAgent && e.name == 'OPENAI_API_KEY'))))
+      message: >-
+        OPENAI_API_KEY from a Secret (or any kagent-openrouter reference) is not allowed in kagent: agents reach the
+        model through the llm-gateway with their ServiceAccount token. Label the Agent
+        llm-gateway.example.com/enabled=true and use a gw-* ModelConfig.
+    - expression: >-
+        !variables.containers.exists(c, has(c.envFrom) && c.envFrom.exists(f,
+          has(f.secretRef) && f.secretRef.name == 'kagent-openrouter'))
+      message: "envFrom the kagent-openrouter Secret is not allowed in kagent (the old shared LLM key)."
+    - expression: >-
+        !has(variables.podSpec.volumes) || !variables.podSpec.volumes.exists(v,
+          has(v.secret) && v.secret.secretName == 'kagent-openrouter')
+      message: "Mounting the kagent-openrouter Secret is not allowed in kagent (the old shared LLM key)."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kagent-no-static-llm-keys-workloads
+spec:
+  policyName: kagent-no-static-llm-keys-workloads
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kagent
+---
+# 2. kagent resources: declarative Agents must be gateway-enabled and use a gw-* ModelConfig; ModelConfigs may not
+#    carry an API key Secret. default-model-config is created by the kagent chart itself (it points at a
+#    non-existent kagent-openai Secret and is unused), so it is exempt or every chart upgrade would fail.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kagent-agents-use-llm-gateway
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["kagent.dev"]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [agents, modelconfigs]
+  validations:
+    - expression: >-
+        object.kind != 'Agent' || !has(object.spec.declarative)
+        || (has(object.metadata.labels)
+            && 'llm-gateway.example.com/enabled' in object.metadata.labels
+            && object.metadata.labels['llm-gateway.example.com/enabled'] == 'true')
+      message: >-
+        Declarative Agents in kagent must carry the label llm-gateway.example.com/enabled: "true" (adds the
+        llm-token-proxy sidecar via manifests/kagent/llm-gateway-sidecar-patch.yaml).
+    - expression: >-
+        object.kind != 'Agent' || !has(object.spec.declarative)
+        || object.spec.declarative.modelConfig.startsWith('gw-')
+      message: "Declarative Agents in kagent must use a gw-* ModelConfig (reached through the llm-gateway)."
+    - expression: >-
+        object.kind != 'ModelConfig' || object.metadata.name == 'default-model-config'
+        || !has(object.spec.apiKeySecret) || object.spec.apiKeySecret == ''
+      message: >-
+        ModelConfigs in kagent may not reference an API key Secret: point baseUrl at the llm-token-proxy sidecar
+        (http://127.0.0.1:8081/v1) and let the llm-gateway hold the provider key.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kagent-agents-use-llm-gateway
+spec:
+  policyName: kagent-agents-use-llm-gateway
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kagent
+---
+# 3. The old shared key's Secret may not be recreated.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kagent-no-openrouter-secret
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE]
+        resources: [secrets]
+  validations:
+    - expression: "object.metadata.name != 'kagent-openrouter'"
+      message: "The shared kagent-openrouter Secret was removed: the OpenRouter key lives only in the llm-gateway namespace."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kagent-no-openrouter-secret
+spec:
+  policyName: kagent-no-openrouter-secret
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kagent

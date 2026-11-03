@@ -3,3 +3,10 @@ kind: Kustomization
 resources:
   - modelconfig.yaml
   - agent.yaml
+  - networkpolicy.yaml
+patches:
+  # Part 2: sidecar + projected token for every gateway-enabled agent (see the patch file).
+  - path: llm-gateway-sidecar-patch.yaml
+    target:
+      kind: Agent
+      labelSelector: llm-gateway.example.com/enabled=true

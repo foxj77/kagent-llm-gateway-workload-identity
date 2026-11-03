@@ -1,0 +1,61 @@
+# Part 2: agent pods get default-deny egress and may reach only DNS, the llm-gateway and the kagent services they use.
+# No direct internet: the model is reached through the gateway.
+#
+# Adjust the allow list to your agents' tools (MCP servers etc.). Agents that clone skills from GitHub at start-up
+# need internet egress, which NetworkPolicy cannot narrow to github.com; exclude them with a NotIn on
+# app.kubernetes.io/name and say so.
+#
+# Prove it with scripts/test-network-policies.sh: from a running pod, on every node.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-egress
+  namespace: kagent
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/managed-by
+        operator: In
+        values: [kagent]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # The model, via the llm-token-proxy sidecar
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llm-gateway
+          podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: llm-gateway
+      ports:
+        - port: 80
+          protocol: TCP
+    # kagent controller (sessions, tasks)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kagent
+              app.kubernetes.io/component: controller
+      ports:
+        - port: 8083
+          protocol: TCP
+    # kagent's built-in tool server
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kagent-tools
+      ports:
+        - port: 8084
+          protocol: TCP

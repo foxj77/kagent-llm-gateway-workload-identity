@@ -1,0 +1,65 @@
+# Part 2: the sidecar wiring from part 1, written once and applied by Kustomize (kustomization.yaml `patches`) to
+# every Agent labelled llm-gateway.example.com/enabled: "true". Migrating an agent = add that label + use a gw-*
+# ModelConfig + add its ServiceAccount to the allow list in manifests/llm-gateway/policy.yaml (one commit).
+#
+# The llm-token-proxy sidecar (./sidecar) listens on 127.0.0.1:8081 and replaces the Authorization header with the
+# pod's projected ServiceAccount token, re-read on every request. The token volume is mounted only into the sidecar.
+#
+# Merge-patch semantics: these lists replace any the Agent sets itself.
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: llm-gateway-sidecar
+spec:
+  declarative:
+    deployment:
+      # Pod label the llm-gateway NetworkPolicy admits: only gateway-enabled agent pods may connect to the gateway.
+      labels:
+        llm-gateway.example.com/client: "true"
+      env:
+        # The runtime's OpenAI client won't start without a key. Not a secret: the sidecar replaces the
+        # Authorization header on every request.
+        - name: OPENAI_API_KEY
+          value: unused-sidecar-injects-sa-token
+      volumes:
+        - name: llm-gateway-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: llm-gateway
+                  # One hour, as in part 1. The kubelet rewrites the file at 80% of its lifetime and the sidecar
+                  # re-reads it per request. 600 (10 minutes) is the kubelet minimum and shortens the window in
+                  # which a stolen token works; part 3 moves to it.
+                  expirationSeconds: 3600
+                  path: token
+      # If your sidecar image is in a private registry, add an imagePullSecret here.
+      # imagePullSecrets:
+      #   - name: my-registry-pull-secret
+      extraContainers:
+        - name: llm-token-proxy
+          # Build from ./sidecar and push to your own registry, then pin by digest (image@sha256:...).
+          image: REPLACE_WITH_YOUR_REGISTRY/llm-token-proxy:latest
+          env:
+            - name: LISTEN_ADDR
+              value: 127.0.0.1:8081   # loopback only; 8080 is the agent's own port
+            - name: UPSTREAM_URL
+              value: http://llm-gateway.llm-gateway.svc.cluster.local:80
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              memory: 32Mi
+          volumeMounts:
+            - name: llm-gateway-token
+              mountPath: /var/run/secrets/llm-gateway
+              readOnly: true

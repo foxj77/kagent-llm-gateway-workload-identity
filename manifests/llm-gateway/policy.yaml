@@ -1,12 +1,11 @@
-# Short-lived identity: agents present a projected ServiceAccount token (aud=llm-gateway,
-# 1h TTL, rotated by the kubelet). The gateway validates it against the cluster's
-# ServiceAccount signing key, then checks the subject against an allow list.
+# Identity, model allow list and budgets for the llm-gateway.
 #
-# JWKS: this is your cluster's PUBLIC signing key (not a secret). It is inlined because
-# the API server's JWKS endpoint requires authentication. Fetch it with:
-#   kubectl get --raw /openid/v1/jwks
-# and paste the whole JSON document below. A cluster rebuild or signing-key rotation
-# changes it: every call then fails closed with 401 until you refresh it.
+# Authentication: agents present a projected ServiceAccount token (aud=llm-gateway, rotated by the kubelet). The
+# gateway validates signature, issuer, audience and expiry against the cluster's ServiceAccount signing keys.
+#
+# JWKS (part 2): fetched from the Kubernetes API server and cached for 5 minutes, instead of a pasted copy that
+# breaks on every cluster rebuild. Needs kube-apiserver-backend.yaml and jwks-discovery-rbac.yaml. The fetch is
+# done by the agentgateway controller (in its own namespace), which pushes the keys to the gateway proxy.
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
@@ -29,11 +28,31 @@ spec:
           validation:
             requiredClaims: [exp, aud, sub]
           jwks:
-            inline: 'REPLACE_WITH_OUTPUT_OF_kubectl_get_--raw_/openid/v1/jwks'
+            remote:
+              backendRef:
+                group: agentgateway.dev
+                kind: AgentgatewayBackend
+                name: kube-apiserver
+              jwksPath: openid/v1/jwks
+              cacheDuration: 5m
     authorization:
       action: Allow
       policy:
         matchExpressions:
-          # Per-agent allow list: the ServiceAccount identity is the agent identity.
-          # kagent names each agent's ServiceAccount after the agent.
-          - 'jwt.sub in ["system:serviceaccount:kagent:gw-test-agent"]'
+          # Per-agent allow list AND per-agent model (part 2). The ServiceAccount is the agent identity (kagent names
+          # each agent's ServiceAccount after the agent). x-llm-model is set from the request body by
+          # model-header-policy.yaml, which overwrites any value a client sends. Each agent may call only its own
+          # model; anything else is 403. To add an agent, add its ServiceAccount next to the model it uses.
+          - >-
+            jwt.sub in ["system:serviceaccount:kagent:gw-test-agent"]
+            && request.headers["x-llm-model"] == "nvidia/nemotron-3.5-lightning:free"
+    # Per-agent budgets (part 2), one bucket per ServiceAccount; excess gets 429. These numbers are a starting point,
+    # not a measurement: a router model such as openrouter/auto can use far more tokens per task than a fixed model.
+    rateLimit:
+      local:
+        - key: jwt.sub
+          tokens: 300000
+          unit: Hours
+        - key: jwt.sub
+          requests: 60
+          unit: Minutes

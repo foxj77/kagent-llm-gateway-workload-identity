@@ -1,0 +1,24 @@
+# Copies the requested model from the OpenAI-style request body into the x-llm-model header before routing, so the
+# authorization rule in policy.yaml can allow each agent only its own model.
+#
+# Why a header: when this was written (agentgateway 1.6, Kubernetes mode), HTTP authorization rules could not see
+# the requested model. agentgateway 1.7 exposes llm.requestModel to route-level request policies, which may make
+# this workaround unnecessary (not yet tested here). `set` overwrites any x-llm-model a client sends, so it cannot be
+# forged; a body without a model gets "", which no rule allows.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: llm-gateway-model-header
+  namespace: llm-gateway
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: llm-gateway
+  traffic:
+    phase: PreRouting
+    transformation:
+      request:
+        set:
+          - name: x-llm-model
+            value: 'default(json(request.body).model, "")'
